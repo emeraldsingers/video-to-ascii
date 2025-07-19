@@ -1,0 +1,7 @@
+opencv-python
+numpy
+Pillow
+tqdm
+moderngl
+pyglet
+click
