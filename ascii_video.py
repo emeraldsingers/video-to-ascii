@@ -11,25 +11,28 @@ import subprocess
 import time
 import click
 
-ASCII_CHARS = " .`'^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
-FONT_PATH = r"C:\Windows\Fonts\consola.ttf"
+ASCII_CHARS = " .`'^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$░▒▓█"
 
 class AsciiRendererGPU:
-    def __init__(self, ascii_grid_width, font_size, original_video_width, original_video_height):
+    def __init__(self, ascii_grid_width, font_size, font_path, original_video_width, original_video_height):
         self.window = pyglet.window.Window(visible=False)
         self.ctx = moderngl.create_context()
-        self.font = ImageFont.truetype(FONT_PATH, font_size)
+        self.font = ImageFont.truetype(font_path, font_size)
         ascent, descent = self.font.getmetrics()
         self.font_h = ascent + descent
         bbox_w = self.font.getbbox("X") 
         self.font_w = bbox_w[2] - bbox_w[0]
         if self.font_w <= 0: self.font_w = int(font_size * 0.6)
         if self.font_h <= 0: self.font_h = font_size
+        video_aspect_ratio = original_video_height / original_video_width if original_video_width > 0 else 9/16
+        font_aspect_ratio = self.font_w / self.font_h if self.font_h > 0 else 0.5
+        
         self.ascii_grid_width = ascii_grid_width
-        aspect_ratio = original_video_height / original_video_width if original_video_width > 0 else 9/16
-        self.ascii_grid_height = int(self.ascii_grid_width * aspect_ratio)
+        self.ascii_grid_height = int(self.ascii_grid_width * video_aspect_ratio * font_aspect_ratio)
+
         if self.ascii_grid_height <= 0: self.ascii_grid_height = 1
         self.num_chars = self.ascii_grid_width * self.ascii_grid_height
+
         atlas_img = Image.new('L', (self.font_w * len(ASCII_CHARS), self.font_h), 0)
         draw = ImageDraw.Draw(atlas_img)
         for i, char in enumerate(ASCII_CHARS):
@@ -122,10 +125,10 @@ def calculate_font_size(target_width, ascii_width, font_path):
         ideal_char_w = target_width / ascii_width
         return max(1, int((ideal_char_w / test_w) * 10))
     except IOError:
-        click.echo(f"Error: Could not load font '{font_path}'.", err=True)
+        click.echo(f"Error: Could not load font '{font_path}'. Make sure it's a valid path to a .ttf or .otf file.", err=True)
         sys.exit(1)
 
-def process_video(input_path, output_path, width, height, grid_width):
+def process_video(input_path, output_path, width, height, grid_width, font_path):
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
         click.echo(f"Error: Could not open video file {input_path}", err=True)
@@ -136,12 +139,12 @@ def process_video(input_path, output_path, width, height, grid_width):
     original_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     original_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    font_size = calculate_font_size(width, grid_width, FONT_PATH)
+    font_size = calculate_font_size(width, grid_width, font_path)
     temp_video_path = output_path + ".silent.mp4"
     renderer, out = None, None
 
     try:
-        renderer = AsciiRendererGPU(grid_width, font_size, original_w, original_h)
+        renderer = AsciiRendererGPU(grid_width, font_size, font_path, original_w, original_h)
         out_w, out_h = (width + width % 2, height + height % 2)
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(temp_video_path, fourcc, fps, (out_w, out_h))
@@ -191,7 +194,8 @@ def process_video(input_path, output_path, width, height, grid_width):
 @click.option('--width', '-w', default=1920, help='Width of the output video in pixels.')
 @click.option('--height', 'h', default=1080, help='Height of the output video in pixels.')
 @click.option('--grid-width', '-g', default=300, help='Number of ASCII characters for the width (detail level).')
-def main(input_path, output, width, h, grid_width):
+@click.option('--font', 'font_path', default=r"C:\Windows\Fonts\consola.ttf", help='Path to a MONOSPACED font file (.ttf, .otf).', type=click.Path(exists=True, dir_okay=False))
+def main(input_path, output, width, h, grid_width, font_path):
     """
     Converts a video file to an ASCII art representation using GPU acceleration.
     The audio from the original file is copied to the final output.
@@ -200,9 +204,10 @@ def main(input_path, output, width, h, grid_width):
     click.echo(f"Input: {input_path}")
     click.echo(f"Output: {output}")
     click.echo(f"Resolution: {width}x{h}, Grid Width: {grid_width}")
+    click.echo(f"Font: {font_path}")
     
     start_time = time.time()
-    process_video(input_path, output, width, h, grid_width)
+    process_video(input_path, output, width, h, grid_width, font_path)
     duration = time.time() - start_time
     click.echo(f"Total operation time: {duration:.2f}s")
 
