@@ -626,7 +626,7 @@ def process_video(input_path, output_path, width, height, grid_width, font_path,
 @click.option('--grid-width', '-g', default=300, help='Number of ASCII characters for the width (detail level).')
 @click.option('--font', 'font_path', default=r"C:\Windows\Fonts\consola.ttf", help='Path to a MONOSPACED font file (.ttf, .otf).', type=click.Path(exists=True, dir_okay=False))
 @click.option('--save-temp', default=False, is_flag=True, help='Save the temporary silent video file.')
-@click.option('--use-original-res', default=False, is_flag=True, help='Use original video resolution instead of custom width/height.')
+@click.option('--use-original-res', '-or', default=False, is_flag=True, help='Use original video resolution instead of custom width/height.')
 @click.option('--use-batch', '-b', default=False, is_flag=True, help='Use batch processing for better GPU utilization.')
 @click.option('--batch-size', default=24, help='Number of frames to process in each batch (only with --use-batch).')
 @click.option('--background', '-bg', default='blur', 
@@ -647,7 +647,11 @@ def main(input_path, output, width, height, grid_width, font_path, save_temp, us
     click.echo(f"Input: {input_path}")
     click.echo(f"Output: {output}")
     if use_original_res:
-        click.echo(f"Using original video resolution ({width}x{height}), Grid Width: {grid_width}")
+        cap = cv2.VideoCapture(str(input_path))
+        original_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        original_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+        click.echo(f"Using original video resolution ({original_width}x{original_height}), Grid Width: {grid_width}")
     else:
         click.echo(f"Resolution: {width}x{height}, Grid Width: {grid_width}")
     click.echo(f"Font: {font_path}")
