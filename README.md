@@ -98,7 +98,7 @@ python ascii_video.py "C:\videos\my_clip.webm" \
   -W 1280 -H 720 \
   -g 250 \
   --font "C:\Windows\Fonts\consola.ttf" \
-  -bg adaptive \
+  -bg blur \
   -b --batch-size 8 \
   --save-temp
 ```
@@ -116,10 +116,6 @@ The output will be similar to this:
 ```
 Usage: ascii_video.py [OPTIONS] INPUT_PATH
 
-  Converts a video file to an ASCII art representation using GPU
-  acceleration. The audio from the original file is copied to the final
-  output.
-
 Options:
   -o, --output PATH               Output file path.
   -W, --width INTEGER             Width of the output video in pixels.
@@ -128,6 +124,8 @@ Options:
                                   (detail level).
   --font FILE                     Path to a MONOSPACED font file (.ttf, .otf).
   --save-temp                     Save the temporary silent video file.
+  -or, --use-original-res         Use original video resolution instead of
+                                  custom width/height.
   -b, --use-batch                 Use batch processing for better GPU
                                   utilization.
   --batch-size INTEGER            Number of frames to process in each batch
@@ -136,6 +134,14 @@ Options:
                                   Background mode: none (black), solid (gray),
                                   blur (blurred original), adaptive
                                   (brightness-based)
+  -s, --start-frame INTEGER       Start frame number (0-based index).
+  -e, --end-frame INTEGER         End frame number (exclusive). If not
+                                  specified, processes until the end.
+  --ascii-style [ascii|japanese|chinese]
+                                  ASCII character set to use: ascii
+                                  (standard), japanese (katakana/kanji),
+                                  chinese (simplified). Be sure to use font,
+                                  which supports the selected character set.
   -h, --help                      Show this message and exit.
 ```
 
