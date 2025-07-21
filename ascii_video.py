@@ -17,13 +17,20 @@ from queue import Queue
 ASCII_CHARS = " .`'^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$░▒▓█"
 
 class FrameProducer:
-    def __init__(self, video_path, frame_queue, max_queue_size=30):
+    def __init__(self, video_path, frame_queue, max_queue_size=30, start_frame=0, end_frame=None):
         self.cap = cv2.VideoCapture(video_path)
         self.frame_queue = frame_queue
         self.max_queue_size = max_queue_size
         self.running = False
         self.thread = None
+        self.start_frame = start_frame
+        self.end_frame = end_frame
+        self.current_frame = 0
         
+        if self.start_frame > 0:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
+            self.current_frame = self.start_frame
+    
     def start(self):
         self.running = True
         self.thread = threading.Thread(target=self._produce_frames, daemon=True)
@@ -41,13 +48,18 @@ class FrameProducer:
                 time.sleep(0.001)
                 continue
                 
+            if self.end_frame is not None and self.current_frame >= self.end_frame:
+                self.frame_queue.put(None)
+                break
+                
             ret, frame = self.cap.read()
             if not ret:
                 self.frame_queue.put(None)
                 break
                 
             self.frame_queue.put(frame)
-
+            self.current_frame += 1
+            
 class AsciiRendererGPU:
     def __init__(self, ascii_grid_width, font_size, font_path, original_video_width, original_video_height, bg_mode='adaptive'):
         self.window = pyglet.window.Window(visible=False)
@@ -481,17 +493,29 @@ def calculate_font_size(target_width, ascii_width, font_path):
         click.echo(f"Error: Could not load font '{font_path}'. Make sure it's a valid path to a .ttf or .otf file.", err=True)
         sys.exit(1)
 
-def process_video(input_path, output_path, width, height, grid_width, font_path, save_temp, bg_mode, use_original_res, use_batch, batch_size):
+def process_video(input_path, output_path, width, height, grid_width, font_path, save_temp, bg_mode, use_original_res, use_batch, batch_size, start_frame, end_frame):
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
         click.echo(f"Error: Could not open video file {input_path}", err=True)
         return
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_frames_original = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
     original_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     original_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
+    
+    if end_frame is None:
+        end_frame = total_frames_original
+    
+    end_frame = min(end_frame, total_frames_original)
+    start_frame = max(0, min(start_frame, total_frames_original - 1))
+    
+    if start_frame >= end_frame:
+        click.echo(f"Error: Invalid frame range. Start frame ({start_frame}) must be less than end frame ({end_frame})", err=True)
+        return
+        
+    total_frames = end_frame - start_frame
     
     if use_original_res:
         width, height = original_w, original_h
@@ -500,7 +524,7 @@ def process_video(input_path, output_path, width, height, grid_width, font_path,
     temp_video_path = output_path + ".silent.mp4"
     
     frame_queue = Queue(maxsize=30)
-    producer = FrameProducer(input_path, frame_queue)
+    producer = FrameProducer(input_path, frame_queue, start_frame=start_frame, end_frame=end_frame)
     renderer = None
     out = None
 
@@ -510,7 +534,7 @@ def process_video(input_path, output_path, width, height, grid_width, font_path,
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(temp_video_path, fourcc, fps, (out_w, out_h))
         
-        click.echo(f"Step 1/2: Rendering {total_frames} video frames with {bg_mode} background...")
+        click.echo(f"Step 1/2: Rendering frames {start_frame}-{end_frame-1} ({total_frames} total) with {bg_mode} background...")
         if use_batch:
             click.echo(f"Using batch processing with batch size: {batch_size}")
         
@@ -589,12 +613,19 @@ def process_video(input_path, output_path, width, height, grid_width, font_path,
         renderer.release()
         
         click.echo("\nStep 2/2: Combining video with original audio using FFmpeg...")
+        
+        start_time_sec = start_frame / fps
+        duration_sec = total_frames / fps
+        
         ffmpeg_cmd = [
             "ffmpeg", "-y", "-v", "error",
-            "-i", temp_video_path, "-i", input_path,
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20",
+            "-ss", str(start_time_sec),
+            "-t", str(duration_sec),
+            "-i", input_path,
+            "-i", temp_video_path,
+            "-c:v", "copy",
             "-c:a", "aac", "-b:a", "128k",
-            "-map", "0:v:0", "-map", "1:a:0?",
+            "-map", "1:v:0", "-map", "0:a:0?",
             "-shortest", output_path
         ]
         subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
@@ -632,28 +663,36 @@ def process_video(input_path, output_path, width, height, grid_width, font_path,
 @click.option('--background', '-bg', default='blur', 
               type=click.Choice(['none', 'solid', 'blur', 'adaptive']),
               help='Background mode: none (black), solid (gray), blur (blurred original), adaptive (brightness-based)')
-def main(input_path, output, width, height, grid_width, font_path, save_temp, use_original_res, use_batch, batch_size, background):
-    """
-    Converts a video file to an ASCII art representation using GPU acceleration.
-    The audio from the original file is copied to the final output.
-    
-    Background modes:
-    - none: Black background (original behavior)
-    - solid: Light gray background (fast, but ugly)
-    - blur: Blurred and darkened version of original frame (recommended, but really slow)
-    - adaptive: Background brightness adapts to frame brightness (fast enough, but shitty)
-    """
+@click.option('--start-frame', '-s', default=0, help='Start frame number (0-based index).')
+@click.option('--end-frame', '-e', default=None, type=int, help='End frame number (exclusive). If not specified, processes until the end.')
+def main(input_path, output, width, height, grid_width, font_path, save_temp, use_original_res, use_batch, batch_size, background, start_frame, end_frame):
     click.echo("--- Enhanced Video to ASCII Art Converter ---")
     click.echo(f"Input: {input_path}")
     click.echo(f"Output: {output}")
+    
+    cap = cv2.VideoCapture(str(input_path))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    
     if use_original_res:
-        cap = cv2.VideoCapture(str(input_path))
         original_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         original_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
         click.echo(f"Using original video resolution ({original_width}x{original_height}), Grid Width: {grid_width}")
     else:
+        cap.release()
         click.echo(f"Resolution: {width}x{height}, Grid Width: {grid_width}")
+    
+    if end_frame is None:
+        end_frame = total_frames
+        
+    end_frame = min(end_frame, total_frames)
+    start_frame = max(0, min(start_frame, total_frames - 1))
+    
+    frames_to_process = end_frame - start_frame
+    duration_sec = frames_to_process / fps
+    
+    click.echo(f"Frame range: {start_frame} to {end_frame-1} ({frames_to_process} frames, {duration_sec:.2f}s)")
     click.echo(f"Font: {font_path}")
     if use_batch:
         click.echo(f"Using batch processing with {batch_size} frames per batch.")   
@@ -662,7 +701,7 @@ def main(input_path, output, width, height, grid_width, font_path, save_temp, us
     click.echo()
     
     start_time = time.time()
-    process_video(input_path, output, width, height, grid_width, font_path, save_temp, background, use_original_res, use_batch, batch_size)
+    process_video(input_path, output, width, height, grid_width, font_path, save_temp, background, use_original_res, use_batch, batch_size, start_frame, end_frame)
     duration = time.time() - start_time
     click.echo(f"Total operation time: {duration:.2f}s")
 
