@@ -15,6 +15,8 @@ import threading
 from queue import Queue
 
 ASCII_CHARS = " .`'^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$░▒▓█"
+JAPANESE_ASCII = " ・ヽ一ノ二三八人口日月火木水金土山田中川大小上下左右出入学校雨車電話高新曜語読書買食飲見聞話"
+CHINESE_ASCII = " 一丨丶丿乙二十卜人入八大天口日月田目白石竹雨山川火水木金土风云电车高新话语读写买卖食饮爱想"
 
 class FrameProducer:
     def __init__(self, video_path, frame_queue, max_queue_size=30, start_frame=0, end_frame=None):
@@ -59,9 +61,13 @@ class FrameProducer:
                 
             self.frame_queue.put(frame)
             self.current_frame += 1
-            
+
 class AsciiRendererGPU:
-    def __init__(self, ascii_grid_width, font_size, font_path, original_video_width, original_video_height, bg_mode='adaptive'):
+    def __init__(self, ascii_grid_width, font_size, font_path, original_video_width, original_video_height, bg_mode='adaptive', ascii_chars=None):
+        if ascii_chars is None:
+            ascii_chars = ASCII_CHARS
+        
+        self.ascii_chars = ascii_chars
         self.window = pyglet.window.Window(visible=False)
         self.ctx = moderngl.create_context()
         self.bg_mode = bg_mode
@@ -86,9 +92,9 @@ class AsciiRendererGPU:
             self.ascii_grid_height = 1
         self.num_chars = self.ascii_grid_width * self.ascii_grid_height
 
-        atlas_img = Image.new('L', (self.font_w * len(ASCII_CHARS), self.font_h), 0)
+        atlas_img = Image.new('L', (self.font_w * len(self.ascii_chars), self.font_h), 0)
         draw = ImageDraw.Draw(atlas_img)
-        for i, char in enumerate(ASCII_CHARS):
+        for i, char in enumerate(self.ascii_chars):
             draw.text((i * self.font_w, 0), char, font=self.font, fill=255)
         self.char_atlas = self.ctx.texture(atlas_img.size, 1, atlas_img.tobytes(), dtype='f1')
         self.char_atlas.filter = (moderngl.NEAREST, moderngl.NEAREST)
@@ -342,7 +348,7 @@ class AsciiRendererGPU:
     def _setup_uniforms(self):
         self.program['char_atlas'].value = 0
         self.program['resolution'].value = (self.output_pixel_width, self.output_pixel_height)
-        self.program['char_size_norm'].value = (1 / len(ASCII_CHARS), 1.0)
+        self.program['char_size_norm'].value = (1 / len(self.ascii_chars), 1.0)
         self.program['brightness_boost'].value = 1.8
         self.program['saturation_boost'].value = 1.6
         
@@ -390,7 +396,7 @@ class AsciiRendererGPU:
         rgb_data = processed_data[:, :, :3].astype(np.float32) / 255.0
         gray_data = processed_data[:, :, 3].astype(np.float32) / 255.0
         
-        char_indices = (gray_data * (len(ASCII_CHARS) - 1)).astype(np.int32)
+        char_indices = (gray_data * (len(self.ascii_chars) - 1)).astype(np.int32)
         
         self.instance_data[:, 2:5] = rgb_data.reshape(self.num_chars, 3)
         self.instance_data[:, 5] = char_indices.flatten().view(np.float32)
@@ -493,7 +499,14 @@ def calculate_font_size(target_width, ascii_width, font_path):
         click.echo(f"Error: Could not load font '{font_path}'. Make sure it's a valid path to a .ttf or .otf file.", err=True)
         sys.exit(1)
 
-def process_video(input_path, output_path, width, height, grid_width, font_path, save_temp, bg_mode, use_original_res, use_batch, batch_size, start_frame, end_frame):
+def process_video(input_path, output_path, width, height, grid_width, font_path, save_temp, bg_mode, use_original_res, use_batch, batch_size, start_frame, end_frame, ascii_style):
+    char_sets = {
+        'ascii': ASCII_CHARS,
+        'japanese': JAPANESE_ASCII,
+        'chinese': CHINESE_ASCII
+    }
+    selected_chars = char_sets[ascii_style]
+    
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
         click.echo(f"Error: Could not open video file {input_path}", err=True)
@@ -529,7 +542,7 @@ def process_video(input_path, output_path, width, height, grid_width, font_path,
     out = None
 
     try:
-        renderer = AsciiRendererGPU(grid_width, font_size, font_path, original_w, original_h, bg_mode)
+        renderer = AsciiRendererGPU(grid_width, font_size, font_path, original_w, original_h, bg_mode, selected_chars)
         out_w, out_h = (width + width % 2, height + height % 2)
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(temp_video_path, fourcc, fps, (out_w, out_h))
@@ -665,7 +678,11 @@ def process_video(input_path, output_path, width, height, grid_width, font_path,
               help='Background mode: none (black), solid (gray), blur (blurred original), adaptive (brightness-based)')
 @click.option('--start-frame', '-s', default=0, help='Start frame number (0-based index).')
 @click.option('--end-frame', '-e', default=None, type=int, help='End frame number (exclusive). If not specified, processes until the end.')
-def main(input_path, output, width, height, grid_width, font_path, save_temp, use_original_res, use_batch, batch_size, background, start_frame, end_frame):
+@click.option('--ascii-style', default='ascii',
+              type=click.Choice(['ascii', 'japanese', 'chinese']),
+              help='ASCII character set to use: ascii (standard), japanese (katakana/kanji), chinese (simplified). Be sure to use font, which supports the selected character set.')
+def main(input_path, output, width, height, grid_width, font_path, save_temp, use_original_res, use_batch, batch_size, background, start_frame, end_frame, ascii_style):
+    click.echo()
     click.echo("--- Enhanced Video to ASCII Art Converter ---")
     click.echo(f"Input: {input_path}")
     click.echo(f"Output: {output}")
@@ -696,12 +713,13 @@ def main(input_path, output, width, height, grid_width, font_path, save_temp, us
     click.echo(f"Font: {font_path}")
     if use_batch:
         click.echo(f"Using batch processing with {batch_size} frames per batch.")   
+    click.echo(f"ASCII Style: {ascii_style}")
     click.echo(f"Background: {background}")
     click.echo(f"Save Temp: {save_temp}")
     click.echo()
     
     start_time = time.time()
-    process_video(input_path, output, width, height, grid_width, font_path, save_temp, background, use_original_res, use_batch, batch_size, start_frame, end_frame)
+    process_video(input_path, output, width, height, grid_width, font_path, save_temp, background, use_original_res, use_batch, batch_size, start_frame, end_frame, ascii_style)
     duration = time.time() - start_time
     click.echo(f"Total operation time: {duration:.2f}s")
 
